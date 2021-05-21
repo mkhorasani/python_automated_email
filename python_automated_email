@@ -1,0 +1,144 @@
+import imaplib
+import base64
+import os
+import email
+import pandas as pd
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
+import plotly.express as px
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+import smtplib
+import sys
+from PIL import Image
+
+email_user = 'username@gmail.com'
+email_pass = 'password'
+mail = imaplib.IMAP4_SSL("imap.gmail.com",993)
+mail.login(email_user, email_pass)
+mail.select('"Inbox"')
+
+_,data = mail.search(None, 'ALL')
+
+for email_id in data[0].split():
+    _,data = mail.fetch(email_id, '(RFC822)' )
+    raw_email = data[0][1]
+    raw_email = raw_email.decode('utf-8')
+    email_content = email.message_from_string(raw_email)
+    
+    if 'Exam Results' in email_content['Subject']:
+        for part in email_content.walk():
+            if part.get_content_maintype() == 'multipart':
+                continue
+            if part.get('Content-Disposition') is None:
+                continue
+            
+            filename = part.get_filename()
+            attachement = open('C:/Users/.../Desktop/%s' % (filename), 'wb')
+            attachement.write(part.get_payload(decode=True))
+            attachement.close()
+
+df = pd.read_excel('C:/Users/.../Desktop/Exam_results.xlsx')
+
+exam_averages = [int(df['Exam 1'].mean()), int(df['Exam 2'].mean()),
+                 int(df['Exam 3'].mean()), int(df['Exam 4'].mean())]
+
+exams = ['Exam 1', 'Exam 2', 'Exam 3', 'Exam 4']
+
+for i in range(0,len(df)):
+
+    exam_results = [df.loc[i]['Exam 1'], df.loc[i]['Exam 2'], df.loc[i]['Exam 3'], df.loc[i]['Exam 4']]
+
+    #Line chart
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        name=('%s' % (df.loc[i]['Name'] + ' ' + df.loc[i]['Surname'])) ,x=exams, y=exam_results,
+        text=exam_results,
+        ))
+
+    fig.add_trace(go.Scatter(
+        name='Average',x=exams, y=exam_averages,
+        text=exam_averages,
+        ))
+
+    fig.update_layout(
+        title_text='Average Exam Scores',
+        xaxis_title_text='Exam',
+        yaxis_title_text='Score',
+    )
+
+    fig.update_layout(height=700, showlegend=True)
+    fig.write_image('C:/Users/.../Desktop/line_chart.png')
+
+    #Bar chart
+    fig_1 = go.Figure(data=[
+        go.Bar(name='%s' % (df.loc[i]['Name'] + ' ' + df.loc[i]['Surname']),
+                x=exams, y=exam_results,text=exam_results,textposition='auto',),
+        go.Bar(name='Average', x=exams, y=exam_averages,text=exam_averages,
+               textposition='auto')
+        ])
+
+    fig_1.update_layout(
+        title_text='Average Exam Scores',
+        xaxis_title_text='Exam',
+        yaxis_title_text='Score',
+    )
+
+    fig_1.update_layout(height=700, showlegend=True)
+    fig_1.write_image('C:/Users/.../Desktop/bar_chart.png')
+
+    #Histogram plot
+    fig_2 = go.Figure()
+    fig_2.add_trace(go.Histogram(name='Exam 1',x=df['Exam 1']))
+    fig_2.add_trace(go.Histogram(name='Exam 2',x=df['Exam 2']))
+    fig_2.add_trace(go.Histogram(name='Exam 3',x=df['Exam 3']))
+    fig_2.add_trace(go.Histogram(name='Exam 4',x=df['Exam 4']))
+
+    fig_2.update_layout(
+        title_text='Histogram of Exam Scores',
+        xaxis_title_text='Score',
+        yaxis_title_text='Count',
+    )
+
+    fig_2.update_layout(height=700, showlegend=True)
+    fig_2.write_image('C:/Users/.../Desktop/histogram.png')
+
+    #Combining images
+    images = [Image.open(x) for x in ['line_chart.png','bar_chart.png','histogram.png']]
+    widths, heights = zip(*(i.size for i in images))
+    total_width = sum(widths)
+    max_height = max(heights)
+    combined_image = Image.new('RGBA', (total_width, max_height))
+    offset = 0
+    
+    for im in images:
+      combined_image.paste(im, (offset,0))
+      offset += im.size[0]
+
+    combined_image = combined_image.resize((int(0.5*total_width), int(0.5*max_height)))
+    combined_image.save('combined.png')
+
+    #Sending email
+    message = MIMEMultipart()
+    message['Subject'] = ('Exam Results for %s' % (df.loc[i]['Name'] + ' ' + df.loc[i]['Surname']))
+    message.attach(MIMEText('Dear %s please find your exam results below:' % (df.loc[i]['Name'])))
+
+    #Embedding image
+    message_body = MIMEText('<br><img src="cid:%s"><br>' % ('combined.png'), 'html')  
+    message.attach(message_body)
+
+    file = open('combined.png', 'rb')                                                    
+    image = MIMEImage(file.read())
+    file.close()
+    image.add_header('Content-ID', '<{}>'.format('combined.png'))
+    message.attach(image)
+
+    #Connecting to email server
+    smtp = smtplib.SMTP('smtp.gmail.com:587')
+    smtp.ehlo()
+    smtp.starttls()
+
+    smtp.login(email_user, email_pass)
+    smtp.sendmail(email_user,df.loc[i]['Email'],message.as_string())
+    smtp.quit()  
